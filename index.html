@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Light Simulator</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span>Light Simulator</div>
+  <div class="top-actions">
+    <button class="btn primary" id="btn-upload" title="Upload a floor plan (PNG, JPG or PDF)">
+      <svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>Upload plan
+    </button>
+    <button class="btn" id="btn-sample">Sample apartment</button>
+    <span class="sep"></span>
+    <button class="btn ghost" id="btn-open" title="Open a saved project">Open</button>
+    <button class="btn ghost" id="btn-save" title="Save project (⌘S)">Save</button>
+    <button class="btn ghost" id="btn-export" title="Download the current view as an image">Export PNG</button>
+    <button class="btn ghost" id="btn-clear" title="Remove lights, or start over">Clear…</button>
+  </div>
+  <div class="totals" id="totals"></div>
+  <div class="calc-status" id="calc-status"></div>
+  <input type="file" id="file-plan" accept="image/*,.pdf,application/pdf" hidden>
+  <input type="file" id="file-project" accept=".json,application/json" hidden>
+</header>
+
+<div class="main">
+  <nav class="tools" id="tools">
+    <button class="tool" data-tool="select" title="Select & move (V)">
+      <svg viewBox="0 0 24 24"><path d="M6 3l13 8.5-6 1.5-3 6z"/></svg><span>Select</span>
+    </button>
+    <button class="tool" data-tool="light" title="Place lights (L)">
+      <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.1V16h5v-.1c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3z"/></svg><span>Light</span>
+    </button>
+    <button class="tool" data-tool="wall" title="Draw walls (W)">
+      <svg viewBox="0 0 24 24"><path d="M3 9h18v6H3z"/><path d="M7.5 9l-3 6M12.5 9l-3 6M17.5 9l-3 6"/></svg><span>Wall</span>
+    </button>
+    <button class="tool" data-tool="room" title="Room check (R)">
+      <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" stroke-dasharray="3 2.4"/><path d="M9 12.5l2 2 4-4.5"/></svg><span>Room</span>
+    </button>
+    <button class="tool" data-tool="furniture" title="Furniture (B)">
+      <svg viewBox="0 0 24 24"><path d="M5 11V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3"/><path d="M3 13a2 2 0 0 1 4 0v2h10v-2a2 2 0 0 1 4 0v4H3z"/><path d="M5 17v2M19 17v2"/></svg><span>Furniture</span>
+    </button>
+    <button class="tool" data-tool="scale" title="Set scale (S)">
+      <svg viewBox="0 0 24 24"><path d="M3 16.5L16.5 3 21 7.5 7.5 21z"/><path d="M7 12.5l2 2M10 9.5l2 2M13 6.5l2 2"/></svg><span>Scale</span>
+    </button>
+    <div class="tools-sep"></div>
+    <button class="tool small" id="btn-undo" title="Undo (⌘Z)">
+      <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span>Undo</span>
+    </button>
+    <button class="tool small" id="btn-redo" title="Redo (⇧⌘Z)">
+      <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg><span>Redo</span>
+    </button>
+  </nav>
+
+  <section class="stage" id="stage">
+    <canvas id="canvas"></canvas>
+    <canvas id="canvas3d"></canvas>
+    <div class="hint" id="hint"></div>
+    <div class="focus-chip" id="focus-chip" hidden>
+      <span>Showing <b id="focus-name"></b> only</span>
+      <button class="btn small" id="focus-exit">Show all rooms</button>
+    </div>
+
+    <div class="viewbar">
+      <div class="viewrow">
+        <div class="seg" id="dim-seg">
+          <button data-dim="2d">2D</button>
+          <button data-dim="3d">3D</button>
+        </div>
+        <div class="seg" id="mode-seg">
+          <button data-mode="lux">Lux map</button>
+          <button data-mode="real">Realistic</button>
+        </div>
+        <button class="seg-toggle" id="btn-opts" title="View options (O)" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+        </button>
+      </div>
+      <div class="view-panels" id="view-panels">
+      <div class="view-opts" id="opts-lux">
+        <label class="mini"><span>Overlay</span><input type="range" id="v-opacity" min="0.2" max="1" step="0.05"></label>
+        <label class="mini"><span>Scale</span>
+          <select id="v-scale">
+            <option value="auto">Auto</option>
+            <option value="100">0–100 lx</option>
+            <option value="200">0–200 lx</option>
+            <option value="300">0–300 lx</option>
+            <option value="500">0–500 lx</option>
+            <option value="750">0–750 lx</option>
+            <option value="1000">0–1000 lx</option>
+            <option value="2000">0–2000 lx</option>
+          </select>
+        </label>
+        <label class="mini check"><input type="checkbox" id="v-bands"><span>Show steps (isolux bands)</span></label>
+      </div>
+      <div class="view-opts" id="opts-real">
+        <label class="mini"><span>Exposure</span><input type="range" id="v-exposure" min="0.25" max="3" step="0.05"></label>
+        <p class="mini-note">A night-time preview of how the light falls, tinted by each fixture's colour temperature.</p>
+      </div>
+      <div class="view-opts" id="opts-3d">
+        <label class="mini check"><input type="checkbox" id="v-cut"><span>Cut walls to 1.2 m to see inside</span></label>
+        <label class="mini check"><input type="checkbox" id="v-furn"><span>Show furniture</span></label>
+      </div>
+      <div class="view-opts" id="opts-screen">
+        <div class="mini-title">On screen</div>
+        <label class="mini check"><input type="checkbox" id="ui-hints"><span>Tool hints</span></label>
+        <label class="mini check"><input type="checkbox" id="ui-legend"><span>Lux legend</span></label>
+        <label class="mini check"><input type="checkbox" id="ui-labels"><span>Room labels</span></label>
+      </div>
+      </div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+    <div class="zoombar">
+      <button id="zoom-out" title="Zoom out (−)">−</button>
+      <button id="zoom-fit" title="Fit the plan / reset the 3D view (F)">Fit</button>
+      <button id="zoom-in" title="Zoom in (+)">+</button>
+      <button id="view-top" title="Look straight down">Top</button>
+    </div>
+    <div class="readout" id="readout"></div>
+
+    <div class="empty" id="empty" hidden>
+      <div class="empty-card">
+        <div class="empty-glow"></div>
+        <h2>See your lighting before it's built</h2>
+        <p>Upload a floor plan (PNG, JPG or PDF), set its scale, place your lights and get an instant lux map.</p>
+        <div class="empty-actions">
+          <button class="btn primary" data-action="upload">Upload plan</button>
+          <button class="btn" data-action="sample">Try the sample apartment</button>
+        </div>
+        <p class="note">or drop a file anywhere here</p>
+      </div>
+    </div>
+    <div class="drop" id="drop"><div>Drop your floor plan or project file</div></div>
+  </section>
+
+  <aside class="side" id="side">
+    <section class="panel" id="panel-edit">
+      <div class="editor" id="ed-none">
+        <h3>Inspector</h3>
+        <p class="note" id="ed-none-text"></p>
+      </div>
+
+      <div class="editor" id="ed-light" hidden>
+        <div class="ed-head">
+          <div><h3 id="ed-light-title">Next light</h3><p class="note" id="ed-light-sub"></p></div>
+          <div class="ed-actions" id="light-actions">
+            <button class="icon-btn" id="f-rotate" title="Rotate 90°"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg></button>
+            <button class="icon-btn" id="light-dup" title="Duplicate (⌘D)"><svg viewBox="0 0 24 24"><path d="M8 8h12v12H8z"/><path d="M16 8V4H4v12h4"/></svg></button>
+            <button class="icon-btn danger" id="light-del" title="Delete (Del)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+          </div>
+        </div>
+        <label class="field"><span>Fixture type</span><select id="f-type"></select></label>
+        <div class="lib-row" id="lib-row" hidden>
+          <img id="lib-thumb" alt="">
+          <span id="lib-row-name"></span>
+          <button class="btn small ghost" id="lib-edit">Edit</button>
+        </div>
+        <div class="btn-row lib-add-row" id="lib-add-row" hidden>
+          <button class="btn small" id="lib-add">＋ Add our own fixture (PNG)</button>
+        </div>
+        <div class="row2">
+          <label class="field"><span>Power</span><div class="unit"><input type="number" id="f-watts" min="0.5" step="0.5"><em>W</em></div></label>
+          <label class="field"><span>Efficacy</span><div class="unit"><input type="number" id="f-eff" min="5" step="1"><em>lm/W</em></div></label>
+        </div>
+        <label class="field"><span>Light output</span><div class="unit"><input type="number" id="f-lumens" min="1" step="10"><em>lm</em></div></label>
+        <div class="row2">
+          <label class="field"><span>Beam angle</span><div class="unit"><input type="number" id="f-beam" min="10" max="170" step="1"><em>°</em></div></label>
+          <label class="field"><span>Mounting height</span><div class="unit"><input type="number" id="f-height" min="0.3" max="30" step="0.05"><em>m</em></div></label>
+        </div>
+        <div class="row-flex" id="f-shape">
+          <label class="field"><span>Length</span><div class="unit"><input type="number" id="f-length" min="0.1" max="20" step="0.1"><em>m</em></div></label>
+          <label class="field" id="f-width-field"><span>Width</span><div class="unit"><input type="number" id="f-width" min="0.1" max="20" step="0.1"><em>m</em></div></label>
+          <label class="field"><span>Rotation</span><div class="unit"><input type="number" id="f-angle" min="-360" max="360" step="15"><em>°</em></div></label>
+        </div>
+        <label class="field"><span>Colour temperature</span><select id="f-cct"></select></label>
+        <p class="note" id="f-note"></p>
+      </div>
+
+      <div class="editor" id="ed-zone" hidden>
+        <div class="ed-head">
+          <div><h3>Room check</h3></div>
+          <div class="ed-actions">
+            <button class="icon-btn danger" id="zone-del" title="Delete room (Del)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+          </div>
+        </div>
+        <label class="field"><span>Name</span><input type="text" id="z-name" maxlength="40"></label>
+        <label class="field"><span>Room type</span><select id="z-type"></select></label>
+        <div class="row2">
+          <label class="field"><span>Target average</span><div class="unit"><input type="number" id="z-target" min="1" step="10"><em>lx</em></div></label>
+          <label class="field"><span>Min. uniformity</span><input type="number" id="z-u0" min="0" max="1" step="0.05"></label>
+        </div>
+        <div class="stats" id="z-stats"></div>
+        <p class="advice" id="z-advice"></p>
+      </div>
+
+      <div class="editor" id="ed-wall" hidden>
+        <div class="ed-head">
+          <div><h3 id="ed-wall-title">Wall</h3></div>
+          <div class="ed-actions" id="wall-actions">
+            <button class="icon-btn danger" id="wall-del" title="Delete wall (Del)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+          </div>
+        </div>
+        <label class="field"><span>Thickness</span><div class="unit"><input type="number" id="w-thick" min="0.05" max="1" step="0.01"><em>m</em></div></label>
+        <p class="note" id="w-note"></p>
+      </div>
+
+      <div class="editor" id="ed-furniture" hidden>
+        <div class="ed-head">
+          <div><h3 id="ed-furn-title">Furniture</h3><p class="note" id="ed-furn-sub"></p></div>
+          <div class="ed-actions" id="furn-actions">
+            <button class="icon-btn danger" id="furn-del" title="Delete (Del)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+          </div>
+        </div>
+        <label class="field"><span>Type</span><select id="u-kind"></select></label>
+        <div class="row2">
+          <label class="field"><span>Shape</span>
+            <select id="u-shape"><option value="box">Box</option><option value="round">Round</option></select>
+          </label>
+          <label class="field"><span>Height</span><div class="unit"><input type="number" id="u-height" min="0.05" max="6" step="0.05"><em>m</em></div></label>
+        </div>
+        <p class="note" id="u-note"></p>
+        <div class="btn-row">
+          <button class="btn small" id="furn-detect">Detect from plan</button>
+          <button class="btn small ghost" id="furn-clear">Remove all</button>
+        </div>
+      </div>
+
+      <div class="editor" id="ed-scale" hidden>
+        <h3>Scale</h3>
+        <p class="note" id="scale-note"></p>
+        <div class="btn-row">
+          <button class="btn small" id="scale-crop">Crop the drawing…</button>
+        </div>
+      </div>
+
+      <div class="editor" id="ed-crop" hidden>
+        <h3>Crop the drawing</h3>
+        <p class="note">Drag a box around the floor plan. Everything outside it is cut away, such as titles, logos, QR codes and decorations, which could otherwise be mistaken for walls or furniture.</p>
+        <div class="btn-row">
+          <button class="btn small primary" id="crop-apply" disabled>Crop</button>
+          <button class="btn small ghost" id="crop-skip">Skip</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Room checks <span class="count" id="zone-count"></span></h3>
+      <div id="zone-list"></div>
+    </section>
+
+    <section class="panel">
+      <h3>Room &amp; calculation</h3>
+      <div class="row2">
+        <label class="field"><span>Ceiling height</span><div class="unit"><input type="number" id="s-ceiling" min="1.8" max="30" step="0.05"><em>m</em></div></label>
+        <label class="field"><span>Work plane</span><div class="unit"><input type="number" id="s-workplane" min="0" max="3" step="0.05"><em>m</em></div></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Wall &amp; ceiling colour</span>
+          <select id="s-reflect">
+            <option value="0">None (outdoors)</option>
+            <option value="0.3">Dark</option>
+            <option value="0.5">Medium</option>
+            <option value="0.7">Light</option>
+          </select>
+        </label>
+        <label class="field"><span>Maintenance factor</span><input type="number" id="s-mf" min="0.5" max="1" step="0.05"></label>
+      </div>
+      <div class="row2">
+        <label class="field"><span>Supply voltage</span><div class="unit"><input type="number" id="s-voltage" min="12" max="400" step="1"><em>V</em></div></label>
+        <label class="field"><span>Detail</span>
+          <select id="s-detail">
+            <option value="draft">Draft (fast)</option>
+            <option value="normal">Normal</option>
+            <option value="fine">Fine</option>
+          </select>
+        </label>
+      </div>
+      <label class="check"><input type="checkbox" id="s-autowalls"><span>Detect walls from the plan</span></label>
+      <label class="field"><span>Wall detection sensitivity</span><input type="range" id="s-wallsens" min="0" max="1" step="0.05"></label>
+      <label class="check"><input type="checkbox" id="s-showwalls"><span>Highlight detected walls</span></label>
+      <p class="note" id="s-note"></p>
+      <details class="method">
+        <summary>How the calculation works</summary>
+        <p>Each point on the work plane gets direct light from every fixture it can "see" (walls block light). Brightness falls off with distance (inverse-square and cosine laws), and the beam angle sets how concentrated the light is.</p>
+        <p>Light bouncing off walls and ceiling is estimated from the room size and surface colour. The total is then multiplied by the maintenance factor to allow for dirt and ageing.</p>
+        <p>In 3D, the floor shows the work-plane result and each wall shows the light falling on it, calculated the same way for its height and direction.</p>
+        <p>Results are indicative and good for early design decisions. For final sign-off, use the manufacturer's photometric files (IES/LDT) in DIALux or Relux.</p>
+      </details>
+    </section>
+  </aside>
+</div>
+
+<dialog id="page-dialog" class="dialog wide">
+  <h3>Which page has the floor plan?</h3>
+  <p class="note">This PDF has <b id="page-count"></b> pages. Click the one with the plan; you can crop it next.</p>
+  <div class="page-grid" id="page-grid"></div>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost" id="page-cancel">Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="lib-dialog" class="dialog lib">
+  <h3 id="lib-title">Add your own fixture</h3>
+  <p class="note">A picture of the lamp (a PNG with a transparent background looks best), its real size and how much light it gives.</p>
+  <button type="button" class="lib-preview" id="lib-preview"></button>
+  <input type="file" id="lib-file" accept="image/*" hidden>
+  <label class="field"><span>Name</span><input type="text" id="lib-name" maxlength="40" placeholder="e.g. Classic crystal chandelier"></label>
+  <div class="row-flex">
+    <label class="field"><span>Length</span><div class="unit"><input type="number" id="lib-length" min="0.05" max="20" step="0.05"><em>m</em></div></label>
+    <label class="field"><span>Width</span><div class="unit"><input type="number" id="lib-width" min="0.05" max="20" step="0.05"><em>m</em></div></label>
+    <label class="field"><span>Lamp height</span><div class="unit"><input type="number" id="lib-body" min="0.05" max="10" step="0.05"><em>m</em></div></label>
+  </div>
+  <div class="row-flex">
+    <label class="field"><span>Centre below ceiling</span><div class="unit"><input type="number" id="lib-drop" min="0" max="10" step="0.05"><em>m</em></div></label>
+    <label class="field"><span>Power</span><div class="unit"><input type="number" id="lib-watts" min="0.5" step="1"><em>W</em></div></label>
+    <label class="field"><span>Light output</span><div class="unit"><input type="number" id="lib-lumens" min="1" step="50"><em>lm</em></div></label>
+  </div>
+  <div class="row-flex">
+    <label class="field"><span>Beam angle</span><div class="unit"><input type="number" id="lib-beam" min="10" max="170" step="5"><em>°</em></div></label>
+    <label class="field"><span>Colour temperature</span><select id="lib-cct"></select></label>
+  </div>
+  <p class="note">Light output is in the lamp's spec sheet. For candle-style chandeliers, add up the bulbs: 12 LED candles of 470 lm give about 5,600 lm. Decorative lamps spread light widely, so keep the beam around 150°.</p>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost danger-text" id="lib-delete">Delete</button>
+    <span class="spacer"></span>
+    <button type="button" class="btn ghost" id="lib-cancel">Cancel</button>
+    <button type="button" class="btn primary" id="lib-save">Add to our fixtures</button>
+  </div>
+</dialog>
+
+<dialog id="clear-dialog" class="dialog">
+  <h3>Clear</h3>
+  <p class="note">Choose what to remove. The first two can be undone with ⌘Z.</p>
+  <div class="choice-list">
+    <button type="button" class="choice" data-clear="lights"><b>Remove all lights</b><span>Keeps the plan, room checks, walls and furniture.</span></button>
+    <button type="button" class="choice" data-clear="items"><b>Remove everything I added</b><span>Lights, room checks, drawn walls and furniture. Keeps the plan and its scale.</span></button>
+    <button type="button" class="choice danger" data-clear="all"><b>Start over</b><span>Closes the plan too and goes back to the upload screen. Save first if you want to keep this project.</span></button>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost" id="clear-cancel">Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="scale-dialog" class="dialog">
+  <form id="scale-form">
+    <h3>Set the scale</h3>
+    <p class="note">The line you drew is <b id="scale-px"></b> long on the drawing. How long is it in reality?</p>
+    <label class="field"><span>Real distance</span><div class="unit"><input type="number" id="scale-input" step="0.01" min="0.05" required><em>m</em></div></label>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="scale-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Set scale</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script src="view3d.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
