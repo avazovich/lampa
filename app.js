@@ -123,7 +123,7 @@
   const DEFAULT_TEMPLATE = { type: 'downlight', watts: 9, efficacy: 90, lumens: 810, beam: 60, height: 2.8, cct: 3000 };
   const fixtureOf = (L) => ({
     type: L.type, watts: L.watts, efficacy: L.efficacy, lumens: L.lumens, beam: L.beam, height: L.height, cct: L.cct,
-    length: L.length || 0, angle: L.angle || 0,
+    length: L.length || 0, width: L.width || 0, angle: L.angle || 0, lib: L.lib || null,
   });
 
   // ---------- State ----------
@@ -138,6 +138,7 @@
     zones: [],
     furniture: [], // { id, x, y, w, h (plan px), shape: 'box' | 'round', kind, height (m) }
     template: { ...DEFAULT_TEMPLATE },
+    library: [], // the studio's own fixtures: { id, name, image, length, width, bodyHeight, drop, watts, lumens, beam, cct }
     furnTemplate: { kind: 'table', shape: 'box', height: 0.75 },
     wallThick: 0.15,
   };
@@ -270,12 +271,26 @@
     return Math.max(0.05, Math.log(0.5) / Math.log(Math.cos(half)));
   }
 
-  const lightKey = (L) => `${version}|${L.x}|${L.y}|${L.lumens}|${L.beam}|${L.height}|${L.length || 0}|${L.angle || 0}`;
+  const lightKey = (L) => `${version}|${L.x}|${L.y}|${L.lumens}|${L.beam}|${L.height}|${L.length || 0}|${L.width || 0}|${L.angle || 0}`;
 
   // Where a fixture emits light, in plan px. A linear fixture (length > 0) is split into short
   // segments along its length, each carrying its share of the lumens.
   function lightPoints(L) {
     if (!(L.length > 0)) return [{ x: L.x, y: L.y, lm: L.lumens }];
+    if (L.width > 0) {
+      // A large fixture (e.g. a 3 × 2 m chandelier): a grid of points over its whole footprint.
+      const a = ((L.angle || 0) * Math.PI) / 180, ux = Math.cos(a), uy = Math.sin(a);
+      const nl = clamp(Math.ceil(L.length / 0.4), 1, 6), nw = clamp(Math.ceil(L.width / 0.4), 1, 4);
+      const len = L.length * state.pxPerM, wid = L.width * state.pxPerM, lm = L.lumens / (nl * nw);
+      const grid2 = [];
+      for (let i = 0; i < nl; i++) {
+        for (let j = 0; j < nw; j++) {
+          const t = ((i + 0.5) / nl - 0.5) * len, u = ((j + 0.5) / nw - 0.5) * wid;
+          grid2.push({ x: L.x + ux * t - uy * u, y: L.y + uy * t + ux * u, lm });
+        }
+      }
+      return grid2;
+    }
     const len = L.length * state.pxPerM;
     const n = clamp(Math.ceil(L.length / 0.15), 2, 16);
     const a = ((L.angle || 0) * Math.PI) / 180, ux = Math.cos(a), uy = Math.sin(a);
@@ -795,6 +810,8 @@
       return Z ? { x0: Z.x / state.pxPerM, z0: Z.y / state.pxPerM, x1: (Z.x + Z.w) / state.pxPerM, z1: (Z.y + Z.h) / state.pxPerM } : null;
     },
     lightPoints,
+    libItem: (id) => byId(state.library, id),
+    libImage: (id) => libImage(id),
     onError: (err) => { toast(`Couldn't open the 3D view: ${err.message}.`, 'error'); setDim('2d'); },
   };
   function setDim(d) {
@@ -846,13 +863,13 @@
 
   function drawGlow(g, L) {
     const r = 0.55 * state.pxPerM;
-    const half = ((L.length || 0) * state.pxPerM) / 2;
+    const half = ((L.length || 0) * state.pxPerM) / 2, hw = ((L.width || 0) * state.pxPerM) / 2;
     const c = cctRgb(L.cct);
     const a = clamp(L.lumens / 1500, 0.35, 1);
     g.save();
     g.translate(L.x, L.y);
     g.rotate(((L.angle || 0) * Math.PI) / 180);
-    if (half) g.scale((half + r) / r, 1); // stretch the glow along a linear fixture
+    if (half) g.scale((half + r) / r, (hw + r) / r); // stretch the glow over a linear or large fixture
     const grd = g.createRadialGradient(0, 0, 0, 0, 0, r);
     grd.addColorStop(0, `rgba(255,255,255,${a})`);
     grd.addColorStop(0.18, `rgba(${c},${a * 0.85})`);
@@ -873,19 +890,12 @@
   function drawFootprint(g, s, L, alpha) {
     const r = footprintRadius(L) * state.pxPerM;
     if (!r) return;
-    const half = ((L.length || 0) * state.pxPerM) / 2;
+    const half = ((L.length || 0) * state.pxPerM) / 2, hw = ((L.width || 0) * state.pxPerM) / 2;
     g.save();
     g.translate(L.x, L.y);
     g.rotate(((L.angle || 0) * Math.PI) / 180);
     g.setLineDash([5 / s, 4 / s]);
-    g.beginPath();
-    if (half) {
-      g.arc(half, 0, r, -Math.PI / 2, Math.PI / 2);
-      g.arc(-half, 0, r, Math.PI / 2, Math.PI * 1.5);
-      g.closePath();
-    } else {
-      g.arc(0, 0, r, 0, Math.PI * 2);
-    }
+    rr(g, -half - r, -hw - r, 2 * (half + r), 2 * (hw + r), r); // a circle, a capsule or a rounded box
     g.lineWidth = 3 / s;
     g.strokeStyle = `rgba(0,0,0,${alpha * 0.5})`;
     g.stroke();
@@ -899,6 +909,33 @@
     const r = 6.5 / s;
     g.save();
     if (o.ghost) g.globalAlpha = 0.6;
+    if (L.width > 0) {
+      // Large or custom fixture: its real footprint, with the studio's picture of it.
+      const len = L.length * state.pxPerM, wid = L.width * state.pxPerM, rad = Math.min(len, wid) * 0.12;
+      g.translate(L.x, L.y);
+      g.rotate(((L.angle || 0) * Math.PI) / 180);
+      if (o.sel) {
+        const p = 4.5 / s;
+        rr(g, -len / 2 - p, -wid / 2 - p, len + p * 2, wid + p * 2, rad + p);
+        g.strokeStyle = ACCENT;
+        g.lineWidth = 2 / s;
+        g.stroke();
+      }
+      rr(g, -len / 2, -wid / 2, len, wid, rad);
+      g.fillStyle = o.real ? `rgba(${cctRgb(L.cct)},0.18)` : 'rgba(255,255,255,0.62)';
+      g.fill();
+      g.setLineDash([5 / s, 3 / s]);
+      g.lineWidth = 1.4 / s;
+      g.strokeStyle = o.real ? 'rgba(255,255,255,0.6)' : '#14171d';
+      g.stroke();
+      const im = L.lib ? libImage(L.lib) : null;
+      if (im && im.complete && im.naturalWidth) {
+        const k = Math.min((len * 0.9) / im.naturalWidth, (wid * 0.9) / im.naturalHeight);
+        g.drawImage(im, (-im.naturalWidth * k) / 2, (-im.naturalHeight * k) / 2, im.naturalWidth * k, im.naturalHeight * k);
+      }
+      g.restore();
+      return;
+    }
     if (L.length > 0) {
       const len = L.length * state.pxPerM, w = Math.max(0.07 * state.pxPerM, 7 / s);
       g.translate(L.x, L.y);
@@ -1272,7 +1309,14 @@
   function hitLight(p, s) {
     let best = null, bd = 11 / s;
     for (const L of state.lights) {
-      const d = L.length > 0 ? distSeg(p.x, p.y, ...lightEnds(L)) : Math.hypot(L.x - p.x, L.y - p.y);
+      let d;
+      if (L.width > 0) { // distance to a rotated box
+        const a = ((L.angle || 0) * Math.PI) / 180, dx = p.x - L.x, dy = p.y - L.y;
+        const u = dx * Math.cos(a) + dy * Math.sin(a), v = -dx * Math.sin(a) + dy * Math.cos(a);
+        d = Math.hypot(Math.max(0, Math.abs(u) - (L.length * state.pxPerM) / 2), Math.max(0, Math.abs(v) - (L.width * state.pxPerM) / 2));
+      } else {
+        d = L.length > 0 ? distSeg(p.x, p.y, ...lightEnds(L)) : Math.hypot(L.x - p.x, L.y - p.y);
+      }
       if (d < bd) { bd = d; best = L; }
     }
     return best;
@@ -1688,7 +1732,7 @@
   // ---------- Panels ----------
   const F = {
     type: $('#f-type'), watts: $('#f-watts'), eff: $('#f-eff'), lumens: $('#f-lumens'),
-    beam: $('#f-beam'), height: $('#f-height'), cct: $('#f-cct'), length: $('#f-length'), angle: $('#f-angle'),
+    beam: $('#f-beam'), height: $('#f-height'), cct: $('#f-cct'), length: $('#f-length'), width: $('#f-width'), angle: $('#f-angle'),
   };
   const ZF = { name: $('#z-name'), type: $('#z-type'), target: $('#z-target'), u0: $('#z-u0') };
   const UF = { kind: $('#u-kind'), shape: $('#u-shape'), height: $('#u-height') };
@@ -1696,7 +1740,17 @@
     ceiling: $('#s-ceiling'), workplane: $('#s-workplane'), reflect: $('#s-reflect'), mf: $('#s-mf'),
     voltage: $('#s-voltage'), detail: $('#s-detail'), autoWalls: $('#s-autowalls'), wallSens: $('#s-wallsens'), showWalls: $('#s-showwalls'),
   };
-  F.type.innerHTML = Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.label}</option>`).join('');
+  // Fixture types: the presets, then the studio's own fixtures, then "add your own".
+  let typeOptionsSig = '';
+  function buildTypeOptions() {
+    const sig = state.library.map((it) => `${it.id}:${it.name}`).join('|');
+    if (sig === typeOptionsSig && F.type.options.length) return;
+    typeOptionsSig = sig;
+    const presets = Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.label}</option>`).join('');
+    const ours = state.library.map((it) => `<option value="lib:${it.id}">${esc(it.name)}</option>`).join('');
+    F.type.innerHTML = presets + (ours ? `<optgroup label="Our fixtures">${ours}</optgroup>` : '') + '<option value="__add">＋ Add our own fixture (PNG)…</option>';
+  }
+  buildTypeOptions();
   F.cct.innerHTML = Object.keys(CCT_RGB).map((k) => `<option value="${k}">${CCT_LABEL[k]}</option>`).join('');
   UF.kind.innerHTML = Object.entries(FURNITURE).map(([k, t]) => `<option value="${k}">${t.label}${k === 'custom' ? '' : ` · ${t.height} m`}</option>`).join('');
   ZF.type.innerHTML = Object.entries(ROOM_TYPES).map(([k, t]) => `<option value="${k}">${t.label}${k === 'custom' ? '' : ` · ${t.target} lx`}</option>`).join('');
@@ -1719,7 +1773,7 @@
     $('#hint').innerHTML = is3D()
       ? '<b>3D</b> · drag to orbit · right-drag or Shift-drag to pan · scroll or pinch to zoom · click a light to edit it · pick a drawing tool to go back to 2D'
       : warn + hints[tool];
-    $('#hint').hidden = !state.plan || !ui.hints;
+    $('#hint').hidden = !state.plan || !ui.hints || !!focusZoneId; // the focus bar takes its place
   }
 
   function refreshEditor() {
@@ -1739,18 +1793,29 @@
     if (mode === 'light') {
       const L = sel ? sel.obj : state.template;
       $('#ed-light-title').textContent = sel ? 'Selected light' : 'Next light';
-      $('#ed-light-sub').textContent = sel ? `${PRESETS[L.type]?.label || 'Fixture'}` : 'Settings for the next light you place';
+      const item = L.type === 'lib' ? byId(state.library, L.lib) : null;
+      $('#ed-light-sub').textContent = sel ? (item ? item.name : PRESETS[L.type]?.label || 'Fixture') : 'Settings for the next light you place';
       $('#light-actions').hidden = !sel;
-      setVal(F.type, L.type); setVal(F.watts, L.watts); setVal(F.eff, L.efficacy); setVal(F.lumens, L.lumens);
+      buildTypeOptions();
+      setVal(F.type, item ? `lib:${item.id}` : L.type === 'lib' ? 'custom' : L.type);
+      setVal(F.watts, L.watts); setVal(F.eff, L.efficacy); setVal(F.lumens, L.lumens);
       setVal(F.beam, L.beam); setVal(F.height, L.height); setVal(F.cct, L.cct);
+      $('#lib-row').hidden = !item;
+      $('#lib-add-row').hidden = !!item;
+      if (item) {
+        if ($('#lib-thumb').getAttribute('src') !== item.image) $('#lib-thumb').src = item.image;
+        $('#lib-row-name').textContent = item.name;
+      }
       const linear = L.length > 0;
       $('#f-shape').hidden = !linear;
       $('#f-width-field').hidden = !(L.width > 0);
       $('#f-rotate').hidden = !(sel && linear);
-      if (linear) { setVal(F.length, L.length); setVal(F.angle, L.angle || 0); }
+      if (linear) { setVal(F.length, L.length); setVal(F.width, L.width || 0); setVal(F.angle, L.angle || 0); }
       const V = state.settings.voltage;
       const r = footprintRadius(L);
-      const covers = linear
+      const covers = L.width > 0
+        ? `Light falls on about <b>${(L.length + 2 * r).toFixed(1)} × ${(L.width + 2 * r).toFixed(1)} m</b> of the work plane. `
+        : linear
         ? `Beam covers about <b>${(L.length + 2 * r).toFixed(1)} × ${(2 * r).toFixed(1)} m</b> on the work plane (${fmtInt(L.lumens / L.length)} lm per metre). `
         : `Beam covers a circle about <b>Ø ${(2 * r).toFixed(1)} m</b> on the work plane. `;
       $('#f-note').innerHTML = (r ? covers : '<b>Mounted below the work plane</b>, so it won\'t light it. ')
@@ -1933,6 +1998,161 @@
     refreshCalcStatus();
   }
 
+  // ---------- The studio's own fixtures ----------
+  // Kept in this browser (so every project can use them) and inside each saved project file.
+  const LIB_KEY = 'light-simulator.library';
+  const libImages = new Map(); // fixture id -> Image, for drawing on the plan
+  function libImage(id) {
+    const item = byId(state.library, id);
+    if (!item) return null;
+    let im = libImages.get(id);
+    if (!im || im._src !== item.image) {
+      im = new Image();
+      im._src = item.image;
+      im.onload = () => refreshViz();
+      im.src = item.image;
+      libImages.set(id, im);
+    }
+    return im;
+  }
+  function browserLibrary() {
+    try { return JSON.parse(localStorage.getItem(LIB_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function saveBrowserLibrary() {
+    try { localStorage.setItem(LIB_KEY, JSON.stringify(state.library)); } catch (e) {
+      toast('This browser has no room left to remember the fixture library; it is still saved inside the project file.', 'error');
+    }
+  }
+  function mergeLibrary(items) {
+    const out = items.map((it) => ({ ...it }));
+    for (const it of browserLibrary()) if (!out.some((o) => o.id === it.id)) out.push(it);
+    return out;
+  }
+  function applyLibItem(L, item) {
+    L.type = 'lib';
+    L.lib = item.id;
+    L.watts = item.watts;
+    L.lumens = item.lumens;
+    L.efficacy = Math.round((item.lumens / item.watts) * 10) / 10;
+    L.beam = item.beam;
+    L.cct = item.cct;
+    L.length = item.length;
+    L.width = item.width;
+    L.height = Math.round((state.settings.ceiling - item.drop) * 100) / 100;
+    L.angle = L.angle || 0;
+  }
+
+  const libDlg = $('#lib-dialog');
+  const LF = {
+    name: $('#lib-name'), length: $('#lib-length'), width: $('#lib-width'), body: $('#lib-body'), drop: $('#lib-drop'),
+    watts: $('#lib-watts'), lumens: $('#lib-lumens'), beam: $('#lib-beam'), cct: $('#lib-cct'),
+  };
+  LF.cct.innerHTML = Object.keys(CCT_RGB).map((k) => `<option value="${k}">${CCT_LABEL[k]}</option>`).join('');
+  let libEditing = null; // the fixture being edited, or null when adding
+  let libDraftImage = null;
+  function openLibDialog(item) {
+    libEditing = item;
+    libDraftImage = item ? item.image : null;
+    const d = item || { name: '', length: 1.2, width: 1.2, bodyHeight: 1.0, drop: 0.9, watts: 60, lumens: 5600, beam: 150, cct: 2700 };
+    LF.name.value = d.name; LF.length.value = d.length; LF.width.value = d.width; LF.body.value = d.bodyHeight;
+    LF.drop.value = d.drop; LF.watts.value = d.watts; LF.lumens.value = d.lumens; LF.beam.value = d.beam; LF.cct.value = d.cct;
+    $('#lib-title').textContent = item ? 'Edit your fixture' : 'Add your own fixture';
+    $('#lib-save').textContent = item ? 'Save changes' : 'Add to our fixtures';
+    $('#lib-delete').hidden = !item;
+    renderLibPreview();
+    libDlg.showModal();
+  }
+  function renderLibPreview() {
+    $('#lib-preview').innerHTML = libDraftImage
+      ? `<img src="${libDraftImage}" alt="">`
+      : '<span>Click to choose a PNG or JPG of the lamp, or drop it here</span>';
+  }
+  async function loadLibImage(file) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { toast('Choose an image file (PNG or JPG).', 'error'); return; }
+    const src = await readAs(file, 'readAsDataURL');
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error('the image could not be read'));
+      im.src = src;
+    });
+    // Kept small: the library is stored in the browser and in every project file.
+    const k = Math.min(1, 512 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * k));
+    c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    let out = c.toDataURL('image/webp', 0.9); // keeps transparency, much smaller than PNG
+    if (!out.startsWith('data:image/webp')) out = c.toDataURL('image/png');
+    libDraftImage = out;
+    if (!LF.name.value.trim()) LF.name.value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+    // A new lamp's height follows the picture's proportions until it's typed in.
+    if (!libEditing) LF.body.value = Math.round(((num(LF.length) || 1) * img.naturalHeight) / img.naturalWidth * 20) / 20;
+    renderLibPreview();
+  }
+  $('#lib-preview').addEventListener('click', () => $('#lib-file').click());
+  $('#lib-preview').addEventListener('dragover', (e) => e.preventDefault());
+  $('#lib-preview').addEventListener('drop', (e) => {
+    e.preventDefault();
+    loadLibImage(e.dataTransfer.files[0]).catch((err) => toast(`Couldn't use that picture: ${err.message}.`, 'error'));
+  });
+  $('#lib-file').addEventListener('change', (e) => {
+    loadLibImage(e.target.files[0]).catch((err) => toast(`Couldn't use that picture: ${err.message}.`, 'error'));
+    e.target.value = '';
+  });
+  $('#lib-cancel').addEventListener('click', () => libDlg.close());
+  $('#lib-add').addEventListener('click', () => openLibDialog(null));
+  $('#lib-edit').addEventListener('click', () => {
+    const sel = getSelected();
+    const L = sel?.kind === 'light' ? sel.obj : state.template;
+    const item = byId(state.library, L.lib);
+    if (item) openLibDialog(item);
+  });
+  $('#lib-save').addEventListener('click', () => {
+    if (!libDraftImage) { toast('Add a picture of the lamp first.', 'error'); return; }
+    const name = LF.name.value.trim();
+    if (!name) { toast('Give the fixture a name.', 'error'); LF.name.focus(); return; }
+    const pos = (el, fallback, min) => { const v = num(el); return Number.isFinite(v) && v >= min ? v : fallback; };
+    const data = {
+      name, image: libDraftImage,
+      length: pos(LF.length, 1, 0.05), width: pos(LF.width, 1, 0.05), bodyHeight: pos(LF.body, 1, 0.05), drop: pos(LF.drop, 0.5, 0),
+      watts: pos(LF.watts, 40, 0.5), lumens: pos(LF.lumens, 3000, 1), beam: clamp(pos(LF.beam, 150, 10), 10, 170), cct: +LF.cct.value || 2700,
+    };
+    const editing = libEditing;
+    let item;
+    if (editing) {
+      item = Object.assign(editing, data);
+      for (const L of state.lights) if (L.type === 'lib' && L.lib === item.id) applyLibItem(L, item); // every lamp of this kind follows
+      if (state.template.lib === item.id) applyLibItem(state.template, item);
+    } else {
+      item = { id: `C${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, ...data };
+      state.library.push(item);
+      applyLibItem(state.template, item); // ready to place
+      if (tool !== 'light') setTool('light');
+      else if (selection?.kind === 'light') selection = null;
+    }
+    libImages.delete(item.id);
+    saveBrowserLibrary();
+    libDlg.close();
+    commit();
+    toast(editing ? `Updated “${item.name}”.` : `Added “${item.name}”. Click on the plan to place it.`);
+  });
+  $('#lib-delete').addEventListener('click', () => {
+    const item = libEditing;
+    if (!item) return;
+    const used = state.lights.filter((L) => L.lib === item.id).length;
+    const msg = used ? `Delete “${item.name}” from your fixtures? The ${used} placed on this plan will be removed too.` : `Delete “${item.name}” from your fixtures?`;
+    if (!confirm(msg)) return;
+    state.library = state.library.filter((it) => it !== item);
+    state.lights = state.lights.filter((L) => L.lib !== item.id);
+    if (state.template.lib === item.id) state.template = { ...DEFAULT_TEMPLATE };
+    if (!getSelected()) selection = null;
+    saveBrowserLibrary();
+    libDlg.close();
+    commit();
+  });
+
   // ---------- Panel bindings ----------
   function editLight(fn) {
     const sel = getSelected();
@@ -1942,8 +2162,23 @@
     sync();
   }
   F.type.addEventListener('change', () => {
+    const v = F.type.value;
+    if (v === '__add') {
+      const sel = getSelected();
+      const L = sel?.kind === 'light' ? sel.obj : state.template;
+      F.type.value = L.type === 'lib' ? `lib:${L.lib}` : L.type; // put the menu back
+      openLibDialog(null);
+      return;
+    }
+    if (v.startsWith('lib:')) {
+      const item = byId(state.library, v.slice(4));
+      if (item) { editLight((L) => applyLibItem(L, item)); pushHistory(); }
+      return;
+    }
     editLight((L) => {
-      L.type = F.type.value;
+      L.type = v;
+      L.lib = null;
+      L.width = 0;
       if (L.type === 'custom') return;
       const p = PRESETS[L.type];
       L.watts = p.watts; L.efficacy = p.efficacy; L.lumens = Math.round(p.watts * p.efficacy); L.beam = p.beam;
@@ -1960,9 +2195,10 @@
   F.height.addEventListener('input', () => editLight((L) => { const v = num(F.height); if (v > 0) L.height = clamp(v, 0.1, 50); }));
   F.cct.addEventListener('change', () => { editLight((L) => { L.cct = +F.cct.value; }); pushHistory(); });
   F.length.addEventListener('input', () => editLight((L) => { const v = num(F.length); if (v > 0) L.length = clamp(v, 0.1, 20); }));
+  F.width.addEventListener('input', () => editLight((L) => { const v = num(F.width); if (v > 0) L.width = clamp(v, 0.1, 20); }));
   F.angle.addEventListener('input', () => editLight((L) => { const v = num(F.angle); if (Number.isFinite(v)) L.angle = v; }));
   $('#f-rotate').addEventListener('click', () => { editLight((L) => { L.angle = (((L.angle || 0) + 90) % 180 + 180) % 180; }); pushHistory(); });
-  for (const el of [F.watts, F.eff, F.lumens, F.beam, F.height, F.length, F.angle]) el.addEventListener('change', () => { pushHistory(); requestUI(); });
+  for (const el of [F.watts, F.eff, F.lumens, F.beam, F.height, F.length, F.width, F.angle]) el.addEventListener('change', () => { pushHistory(); requestUI(); });
 
   function editZone(fn) { const sel = getSelected(); if (sel?.kind === 'zone') { fn(sel.obj); sync(); } }
   ZF.name.addEventListener('input', () => editZone((Z) => { Z.name = ZF.name.value || 'Room'; }));
@@ -2095,7 +2331,7 @@
 
   function projectData() {
     return {
-      app: 'light-simulator', version: 1,
+      app: 'light-simulator', version: 1, library: state.library,
       plan: state.plan, pxPerM: state.pxPerM, scaleSet: state.scaleSet,
       settings: state.settings, view: state.view, template: state.template, wallThick: state.wallThick,
       lights: state.lights, walls: state.walls, zones: state.zones, furniture: state.furniture, furnTemplate: state.furnTemplate,
@@ -2149,6 +2385,7 @@
     state.zones = data.zones || [];
     state.furniture = data.furniture || [];
     state.furnTemplate = { kind: 'table', shape: 'box', height: 0.75, ...data.furnTemplate };
+    state.library = mergeLibrary(data.library || []);
     bumpIds();
     selection = null;
     resetHistory();
@@ -2645,6 +2882,7 @@
     state.walls = [];
     state.zones = smp.zones;
     state.furniture = smp.furniture;
+    state.library = mergeLibrary([]);
     selection = null;
     resetHistory();
     fitView();

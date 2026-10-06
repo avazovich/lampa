@@ -452,6 +452,7 @@ window.createView3D = function createView3D(api) {
     for (const L of st.lights) {
       const x = L.x / ppm, z = L.y / ppm, h = L.height;
       const tint = new T.Color(`rgb(${api.cctRgb(L.cct)})`);
+      if (L.type === 'lib') { addCustom(L, x, z, h, H, tint, real); continue; }
       if (L.length > 0) { addLinear(L, x, z, h, H, tint, real); continue; }
       const kind = L.type === 'panel' ? 'panel' : L.type === 'spot' ? 'spot' : L.type === 'chandelier' ? 'chandelier' : 'disc';
       const body = new T.Mesh(geo[kind], new T.MeshBasicMaterial({ color: real ? tint : 0xffffff, side: T.DoubleSide }));
@@ -512,6 +513,47 @@ window.createView3D = function createView3D(api) {
     rebuildDynamic(real);
   }
 
+  // The studio's own fixture: its picture hanging at full size (always facing the viewer),
+  // with glows spread over the area it lights from.
+  const libTextures = new Map(); // fixture id -> { src, tex }
+  function libTexture(id, img) {
+    let t = libTextures.get(id);
+    if (!t || t.src !== img.src) {
+      if (t) t.tex.dispose();
+      const tex = new T.Texture(img);
+      tex.needsUpdate = true;
+      sharedRes.add(tex);
+      t = { src: img.src, tex };
+      libTextures.set(id, t);
+    }
+    return t.tex;
+  }
+  function addCustom(L, x, z, h, H, tint, real) {
+    const item = api.libItem(L.lib), img = api.libImage(L.lib);
+    const len = L.length || 1, wid = L.width || len;
+    if (img && img.complete && img.naturalWidth) {
+      const bodyH = item && item.bodyHeight > 0 ? item.bodyHeight : (len * img.naturalHeight) / img.naturalWidth;
+      const sp = new T.Sprite(new T.SpriteMaterial({ map: libTexture(L.lib, img), transparent: true, alphaTest: 0.05 }));
+      sp.scale.set(Math.max(len, wid), bodyH, 1);
+      sp.position.set(x, h, z);
+      dynGroup.add(sp);
+      const top = h + bodyH / 2;
+      if (top < H - 0.02) dynGroup.add(new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(x, H, z), new T.Vector3(x, top, z)]), mat.cord));
+    }
+    if (real) {
+      const pts = api.lightPoints(L);
+      const step = Math.max(1, Math.ceil(pts.length / 8));
+      const ppm = api.state.pxPerM;
+      for (let i = 0; i < pts.length; i += step) {
+        const glow = new T.Sprite(new T.SpriteMaterial({ map: mat.glowTex, color: tint, blending: T.AdditiveBlending, transparent: true, depthWrite: false }));
+        const size = 0.8 + Math.min((L.lumens / pts.length) * step, 3000) / 2000;
+        glow.scale.set(size, size, 1);
+        glow.position.set(pts[i].x / ppm, h, pts[i].y / ppm);
+        dynGroup.add(glow);
+      }
+    }
+  }
+
   // A linear fixture: a slim bar along its length, hung on two cords when it's a pendant.
   function addLinear(L, x, z, h, H, tint, real) {
     const len = L.length, a = ((L.angle || 0) * Math.PI) / 180;
@@ -563,13 +605,16 @@ window.createView3D = function createView3D(api) {
     selGroup.add(drop);
     const r = api.footprintRadius(L);
     if (r > 0) {
-      const half = (L.length || 0) / 2, ang = ((L.angle || 0) * Math.PI) / 180;
+      // A rounded box around the fixture: a circle, a capsule or a rounded rectangle.
+      const hx = (L.length || 0) / 2, hz = (L.width || 0) / 2, ang = ((L.angle || 0) * Math.PI) / 180;
       const ca = Math.cos(ang), sa = Math.sin(ang);
       const pts = [];
-      for (let i = 0; i <= 64; i++) {
-        const t = (i / 64) * Math.PI * 2 - Math.PI / 2; // round the far end first, then the near end
-        const u = Math.cos(t) * r + (i <= 32 ? half : -half), v = Math.sin(t) * r;
-        pts.push(new T.Vector3(x + u * ca - v * sa, 0.04, z + u * sa + v * ca));
+      for (const [ox, oz, a0] of [[hx, hz, 0], [-hx, hz, Math.PI / 2], [-hx, -hz, Math.PI], [hx, -hz, Math.PI * 1.5]]) {
+        for (let i = 0; i <= 16; i++) {
+          const t = a0 + (i / 16) * (Math.PI / 2);
+          const u = ox + r * Math.cos(t), v = oz + r * Math.sin(t);
+          pts.push(new T.Vector3(x + u * ca - v * sa, 0.04, z + u * sa + v * ca));
+        }
       }
       pts.push(pts[0].clone()); // close the outline
       const ring2 = new T.Line(new T.BufferGeometry().setFromPoints(pts), new T.LineDashedMaterial({ color: 0xffffff, dashSize: 0.15, gapSize: 0.1 }));
@@ -623,7 +668,7 @@ window.createView3D = function createView3D(api) {
     }
     if (api.dataVersion() !== seen.data) { seen.data = api.dataVersion(); updateData(); seen.sel = null; }
     const sel = api.selectedLight();
-    const selKey = sel ? `${sel.id}|${sel.x}|${sel.y}|${sel.height}|${sel.beam}|${sel.length || 0}|${sel.angle || 0}` : '';
+    const selKey = sel ? `${sel.id}|${sel.x}|${sel.y}|${sel.height}|${sel.beam}|${sel.length || 0}|${sel.width || 0}|${sel.angle || 0}` : '';
     if (selKey !== seen.sel) { seen.sel = selKey; updateSelection(); }
     requestRender();
   }
